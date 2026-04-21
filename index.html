@@ -673,50 +673,6 @@
     margin-bottom: 14px;
   }
 
-  /* ── LOCK SCREEN ── */
-  #lock-screen {
-    position: fixed; inset: 0; z-index: 9999;
-    background: radial-gradient(ellipse at 40% 35%, #0e2248 0%, #050d1c 70%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-  }
-
-  #lock-screen.hidden { display: none; }
-
-  .lock-logo {
-    font-size: 3.5rem;
-    margin-bottom: 8px;
-    filter: drop-shadow(0 0 30px rgba(201,168,76,0.5));
-    animation: floatLogo 4s ease-in-out infinite;
-  }
-  @keyframes floatLogo {
-    0%,100% { transform: translateY(0); }
-    50% { transform: translateY(-8px); }
-  }
-
-  .lock-title {
-    font-family: 'Cinzel', serif;
-    font-size: 1.6rem;
-    font-weight: 700;
-    color: var(--gold-light);
-    letter-spacing: 0.12em;
-    text-align: center;
-    text-shadow: 0 0 40px rgba(201,168,76,0.4);
-    margin-bottom: 4px;
-  }
-
-  .lock-subtitle {
-    font-family: 'Crimson Pro', serif;
-    font-size: 0.9rem;
-    color: var(--cream-dim);
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    margin-bottom: 40px;
-  }
-
   /* ── PIN PAD ── */
   .pin-card {
     background: rgba(15, 32, 64, 0.95);
@@ -984,19 +940,6 @@
     <div class="pin-error-msg" id="fs-error"></div>
   </div>
   <button class="fs-cancel-btn" onclick="cancelFsExit()">↩ Stay in Fullscreen</button>
-</div>
-
-<!-- ══ LOCK SCREEN ══ -->
-<div id="lock-screen">
-  <div class="lock-logo">✦</div>
-  <div class="lock-title">Menifee California Stake</div>
-  <div class="lock-subtitle">Missionary Display · Enter PIN to Continue</div>
-  <div class="pin-card">
-    <div class="pin-label">Enter Display PIN</div>
-    <div class="pin-dots" id="lock-dots"></div>
-    <div class="pin-grid" id="lock-grid"></div>
-    <div class="pin-error-msg" id="lock-error"></div>
-  </div>
 </div>
 
 <!-- ══ PASSWORD MODAL (Manage panel guard) ══ -->
@@ -1917,7 +1860,6 @@ function deleteMissionary() {
 // ══════════════════════════════════════════
 //  SECURITY CONFIG  ← Change these values!
 // ══════════════════════════════════════════
-const LOCK_PIN           = '1234';       // PIN to unlock the display on load
 const ADMIN_PASSWORD     = 'stake2024';  // Password to access Manage Missionaries
 const FULLSCREEN_EXIT_CODE = '12345678'; // 8-digit code required to exit fullscreen
 
@@ -1926,14 +1868,17 @@ const FULLSCREEN_EXIT_CODE = '12345678'; // 8-digit code required to exit fullsc
 // ══════════════════════════════════════════
 let fsExitEntry = '';
 let fsExitAllowed = false;
+let fsReentryTimer = null;
 const FS_LENGTH = FULLSCREEN_EXIT_CODE.length;
 
 function requestFullscreen() {
   const el = document.documentElement;
-  if (el.requestFullscreen) el.requestFullscreen();
-  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-  else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
-  else if (el.msRequestFullscreen) el.msRequestFullscreen();
+  try {
+    if (el.requestFullscreen) el.requestFullscreen();
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
+    else if (el.msRequestFullscreen) el.msRequestFullscreen();
+  } catch(e) {}
 }
 
 function isFullscreen() {
@@ -1942,7 +1887,6 @@ function isFullscreen() {
 }
 
 function buildFsOverlay() {
-  // Dots
   const dotsEl = document.getElementById('fs-dots');
   dotsEl.innerHTML = '';
   for (let i = 0; i < FS_LENGTH; i++) {
@@ -1951,7 +1895,6 @@ function buildFsOverlay() {
     d.id = `fsdot-${i}`;
     dotsEl.appendChild(d);
   }
-  // Keys
   const gridEl = document.getElementById('fs-grid');
   gridEl.innerHTML = '';
   const keys = ['1','2','3','4','5','6','7','8','9','⌫','0','↵'];
@@ -1995,11 +1938,14 @@ function checkFsCode() {
     fsExitAllowed = true;
     document.getElementById('fs-overlay').classList.remove('show');
     fsExitEntry = '';
+    updateFsDots();
     // Actually exit fullscreen
-    if (document.exitFullscreen) document.exitFullscreen();
-    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-    else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
-    else if (document.msExitFullscreen) document.msExitFullscreen();
+    try {
+      if (document.exitFullscreen) document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+      else if (document.msExitFullscreen) document.msExitFullscreen();
+    } catch(e) {}
   } else {
     for (let i = 0; i < FS_LENGTH; i++) {
       const d = document.getElementById(`fsdot-${i}`);
@@ -2011,115 +1957,83 @@ function checkFsCode() {
   }
 }
 
+function showFsOverlay() {
+  document.getElementById('fs-overlay').classList.add('show');
+  fsExitEntry = '';
+  updateFsDots();
+  document.getElementById('fs-error').textContent = '';
+}
+
 function cancelFsExit() {
   document.getElementById('fs-overlay').classList.remove('show');
   fsExitEntry = '';
   updateFsDots();
   document.getElementById('fs-error').textContent = '';
-  // Force back to fullscreen
-  setTimeout(requestFullscreen, 100);
+  // Immediately force back into fullscreen
+  requestFullscreen();
 }
 
-// Intercept Escape / fullscreen change
+// ── Fullscreen change: if we lost fullscreen without permission, re-enter immediately ──
+function handleFsChange() {
+  if (!isFullscreen() && !fsExitAllowed) {
+    // Show the guard overlay and force fullscreen back after a tiny delay
+    showFsOverlay();
+    // Keep hammering fullscreen back every 200ms until it sticks
+    clearInterval(fsReentryTimer);
+    fsReentryTimer = setInterval(() => {
+      if (!isFullscreen()) {
+        requestFullscreen();
+      } else {
+        clearInterval(fsReentryTimer);
+      }
+    }, 200);
+  }
+  if (isFullscreen()) {
+    // Successfully back in fullscreen — clear reentry timer
+    clearInterval(fsReentryTimer);
+  }
+  fsExitAllowed = false;
+}
+
 document.addEventListener('fullscreenchange', handleFsChange);
 document.addEventListener('webkitfullscreenchange', handleFsChange);
 document.addEventListener('mozfullscreenchange', handleFsChange);
 document.addEventListener('MSFullscreenChange', handleFsChange);
 
-function handleFsChange() {
-  if (!isFullscreen() && !fsExitAllowed) {
-    // Fullscreen was exited without permission — show the code overlay
-    document.getElementById('fs-overlay').classList.add('show');
-    fsExitEntry = '';
-    updateFsDots();
-  }
-  fsExitAllowed = false; // reset for next time
-}
-
-// Intercept Escape key before it exits fullscreen (best-effort)
+// ── Key interception — capture phase to fire before browser acts ──
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' || e.key === 'F11') {
+  // Block F11 completely
+  if (e.key === 'F11') {
     e.preventDefault();
-    // Show the exit code overlay instead
-    if (isFullscreen()) {
-      document.getElementById('fs-overlay').classList.add('show');
-      fsExitEntry = '';
-      updateFsDots();
-    }
+    e.stopImmediatePropagation();
+    if (isFullscreen()) showFsOverlay();
+    return false;
   }
-}, true);
-
-// ══════════════════════════════════════════
-//  LOCK SCREEN (PIN PAD)
-// ══════════════════════════════════════════
-let lockEntry = '';
-const LOCK_LENGTH = LOCK_PIN.length;
-
-function buildLockScreen() {
-  // Dots
-  const dotsEl = document.getElementById('lock-dots');
-  dotsEl.innerHTML = '';
-  for (let i = 0; i < LOCK_LENGTH; i++) {
-    const d = document.createElement('div');
-    d.className = 'pin-dot';
-    d.id = `ldot-${i}`;
-    dotsEl.appendChild(d);
+  // Escape: browser will exit fullscreen before we can stop it,
+  // but handleFsChange will catch it and force re-entry + show overlay
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (isFullscreen()) showFsOverlay();
+    return false;
   }
-
-  // Keys
-  const gridEl = document.getElementById('lock-grid');
-  gridEl.innerHTML = '';
-  const keys = ['1','2','3','4','5','6','7','8','9','⌫','0','↵'];
-  keys.forEach(k => {
-    const btn = document.createElement('button');
-    btn.className = 'pin-key' + (k === '⌫' || k === '↵' ? ' backspace' : '');
-    btn.textContent = k;
-    btn.onclick = () => lockKeyPress(k);
-    gridEl.appendChild(btn);
-  });
-}
-
-function lockKeyPress(k) {
-  const errorEl = document.getElementById('lock-error');
-  errorEl.textContent = '';
-  if (k === '⌫') {
-    lockEntry = lockEntry.slice(0, -1);
-  } else if (k === '↵') {
-    checkLockPin();
-    return;
-  } else {
-    if (lockEntry.length >= LOCK_LENGTH) return;
-    lockEntry += k;
+  // Block Alt+F4, Ctrl+W, Ctrl+F4 (tab/window close)
+  if ((e.altKey && e.key === 'F4') ||
+      (e.ctrlKey && e.key === 'w') ||
+      (e.ctrlKey && e.key === 'W') ||
+      (e.ctrlKey && e.key === 'F4')) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return false;
   }
-  updateLockDots();
-  if (lockEntry.length === LOCK_LENGTH) {
-    setTimeout(checkLockPin, 120);
-  }
-}
+}, true); // capture phase
 
-function updateLockDots() {
-  for (let i = 0; i < LOCK_LENGTH; i++) {
-    const d = document.getElementById(`ldot-${i}`);
-    if (!d) continue;
-    d.classList.toggle('filled', i < lockEntry.length);
-    d.classList.remove('error');
-  }
-}
-
-function checkLockPin() {
-  if (lockEntry === LOCK_PIN) {
-    document.getElementById('lock-screen').classList.add('hidden');
-  } else {
-    // Shake dots red
-    for (let i = 0; i < LOCK_LENGTH; i++) {
-      const d = document.getElementById(`ldot-${i}`);
-      if (d) { d.classList.remove('filled'); d.classList.add('error'); }
-    }
-    document.getElementById('lock-error').textContent = 'Incorrect PIN — please try again';
-    lockEntry = '';
-    setTimeout(updateLockDots, 600);
-  }
-}
+// ── Block page close / tab close ──
+window.addEventListener('beforeunload', (e) => {
+  e.preventDefault();
+  e.returnValue = '';
+  return '';
+});
 
 // ══════════════════════════════════════════
 //  ADMIN PASSWORD GATE
@@ -2159,7 +2073,6 @@ window.addEventListener('resize', () => {
 });
 
 (async () => {
-  buildLockScreen();
   buildFsOverlay();
   drawStars();
   loadData();
